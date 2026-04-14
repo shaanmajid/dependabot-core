@@ -30,7 +30,7 @@ RSpec.describe Dependabot::Bun::MetadataFinder do
       requirements: [
         { file: "package.json", requirement: "^1.0", groups: [], source: nil }
       ],
-      package_manager: "npm_and_yarn"
+      package_manager: "bun"
     )
   end
 
@@ -72,7 +72,7 @@ RSpec.describe Dependabot::Bun::MetadataFinder do
               ref: "master"
             }
           }],
-          package_manager: "npm_and_yarn"
+          package_manager: "bun"
         )
       end
 
@@ -298,7 +298,7 @@ RSpec.describe Dependabot::Bun::MetadataFinder do
                 url: "https://npm.fury.io/dependabot"
               }
             }],
-            package_manager: "npm_and_yarn"
+            package_manager: "bun"
           )
         end
 
@@ -395,7 +395,7 @@ RSpec.describe Dependabot::Bun::MetadataFinder do
               }
             }
           ],
-          package_manager: "npm_and_yarn"
+          package_manager: "bun"
         )
       end
 
@@ -437,7 +437,7 @@ RSpec.describe Dependabot::Bun::MetadataFinder do
               }
             }
           ],
-          package_manager: "npm_and_yarn"
+          package_manager: "bun"
         )
       end
 
@@ -513,7 +513,7 @@ RSpec.describe Dependabot::Bun::MetadataFinder do
             groups: [],
             source: nil
           }],
-          package_manager: "npm_and_yarn"
+          package_manager: "bun"
         )
       end
 
@@ -522,6 +522,36 @@ RSpec.describe Dependabot::Bun::MetadataFinder do
           "This version was pushed to npm by " \
           "[dougwilson](https://www.npmjs.com/~dougwilson), a new releaser " \
           "for etag since your current version."
+        )
+      end
+    end
+
+    context "when the maintainer name contains spaces" do
+      let(:dependency_name) { "npm-package-json-lint" }
+      let(:npm_url) { "https://registry.npmjs.org/npm-package-json-lint" }
+      let(:dependency) do
+        Dependabot::Dependency.new(
+          name: dependency_name,
+          version: "10.0.0",
+          previous_version: "9.0.0",
+          requirements: [{
+            file: "package.json",
+            requirement: "^10.0",
+            groups: [],
+            source: nil
+          }],
+          package_manager: "bun"
+        )
+      end
+      let(:npm_all_versions_response) do
+        fixture("npm_responses", "npm-package-json-lint.json")
+      end
+
+      it "properly URL-encodes the maintainer name in the link" do
+        expect(maintainer_changes).to eq(
+          "This version was pushed to npm by " \
+          "[GitHub Actions](https://www.npmjs.com/~GitHub%20Actions), a new releaser " \
+          "for npm-package-json-lint since your current version."
         )
       end
     end
@@ -538,7 +568,7 @@ RSpec.describe Dependabot::Bun::MetadataFinder do
           requirements: [
             { file: "package.json", requirement: "^1.0", groups: [], source: nil }
           ],
-          package_manager: "npm_and_yarn"
+          package_manager: "bun"
         )
       end
 
@@ -646,7 +676,7 @@ RSpec.describe Dependabot::Bun::MetadataFinder do
               source: { type: "registry", url: "https://npm.fury.io/dependabot" }
             }
           ],
-          package_manager: "npm_and_yarn"
+          package_manager: "bun"
         )
       end
 
@@ -663,6 +693,158 @@ RSpec.describe Dependabot::Bun::MetadataFinder do
 
       it "uses source from lockfile, not credentials" do
         expect(dependency_url).to eq("https://npm.fury.io/dependabot/etag")
+      end
+    end
+  end
+
+  describe "#encode_npm_releaser (private helper)" do
+    subject(:encoded) { finder.send(:encode_npm_releaser, releaser_name) }
+
+    context "with safe characters only (no encoding needed)" do
+      let(:releaser_name) { "dougwilson" }
+
+      it "returns the name unmodified" do
+        expect(encoded).to eq("dougwilson")
+      end
+    end
+
+    context "with safe characters including dot, underscore, dash" do
+      let(:releaser_name) { "user.name_test-pkg" }
+
+      it "returns the name unmodified" do
+        expect(encoded).to eq("user.name_test-pkg")
+      end
+    end
+
+    context "with space character" do
+      let(:releaser_name) { "GitHub Actions" }
+
+      it "encodes space as %20" do
+        expect(encoded).to eq("GitHub%20Actions")
+      end
+    end
+
+    context "with @ symbol (common in email-like usernames)" do
+      let(:releaser_name) { "user@domain" }
+
+      it "encodes @ as %40" do
+        expect(encoded).to eq("user%40domain")
+      end
+    end
+
+    context "with + symbol" do
+      let(:releaser_name) { "user+admin" }
+
+      it "encodes + as %2B" do
+        expect(encoded).to eq("user%2Badmin")
+      end
+    end
+
+    context "with / symbol" do
+      let(:releaser_name) { "scope/user" }
+
+      it "encodes / as %2F" do
+        expect(encoded).to eq("scope%2Fuser")
+      end
+    end
+
+    context "with mixed special characters" do
+      let(:releaser_name) { "user@host+admin" }
+
+      it "encodes all unsafe characters" do
+        expect(encoded).to eq("user%40host%2Badmin")
+      end
+    end
+
+    context "with empty string" do
+      let(:releaser_name) { "" }
+
+      it "returns empty string unchanged" do
+        expect(encoded).to eq("")
+      end
+    end
+
+    context "with numeric-only name" do
+      let(:releaser_name) { "12345" }
+
+      it "returns unchanged (digits are safe)" do
+        expect(encoded).to eq("12345")
+      end
+    end
+  end
+
+  describe "#normalize_registry_url (private helper)" do
+    subject(:normalized) { finder.send(:normalize_registry_url, registry_url) }
+
+    context "with nil input" do
+      let(:registry_url) { nil }
+
+      it "returns nil" do
+        expect(normalized).to be_nil
+      end
+    end
+
+    context "with registry URL without protocol" do
+      let(:registry_url) { "my.registry.com" }
+
+      it "adds https:// prefix" do
+        expect(normalized).to eq("https://my.registry.com")
+      end
+    end
+
+    context "with registry URL with https protocol" do
+      let(:registry_url) { "https://my.registry.com" }
+
+      it "returns unchanged" do
+        expect(normalized).to eq("https://my.registry.com")
+      end
+    end
+
+    context "with registry URL with http protocol" do
+      let(:registry_url) { "http://my.registry.com" }
+
+      it "returns unchanged" do
+        expect(normalized).to eq("http://my.registry.com")
+      end
+    end
+
+    context "with registry URL containing spaces" do
+      let(:registry_url) { "https://my registry.com" }
+
+      it "encodes spaces as %20" do
+        expect(normalized).to eq("https://my%20registry.com")
+      end
+    end
+
+    context "with registry URL containing multiple spaces" do
+      let(:registry_url) { "https://my  registry  com" }
+
+      it "encodes consecutive spaces as single %20" do
+        expect(normalized).to eq("https://my%20registry%20com")
+      end
+    end
+
+    context "with registry URL with leading/trailing whitespace" do
+      let(:registry_url) { "  https://my.registry.com  " }
+
+      it "strips whitespace and returns URL unchanged" do
+        expect(normalized).to eq("https://my.registry.com")
+      end
+    end
+
+    context "with registry URL with mixed whitespace (spaces and tabs)" do
+      let(:registry_url) { "https://my\t registry.com" }
+
+      it "encodes consecutive whitespace as single %20" do
+        expect(normalized).to eq("https://my%20registry.com")
+      end
+    end
+
+    context "with registry URL with nested spaces and no protocol" do
+      let(:registry_url) { "my registry.com" }
+
+      it "encodes spaces and adds https://" do
+        expect(normalized).to eq("https://my%20registry.com")
       end
     end
   end

@@ -2,6 +2,7 @@
 # frozen_string_literal: true
 
 require "excon"
+require "cgi"
 require "sorbet-runtime"
 require "time"
 
@@ -15,6 +16,13 @@ module Dependabot
   module Bun
     class MetadataFinder < Dependabot::MetadataFinders::Base
       extend T::Sig
+
+      # RFC 3986 unreserved characters safe in URI paths: A-Z, a-z, 0-9, ., _, -, ~
+      # Use an explicit ASCII character class because Ruby's \w is encoding-aware
+      # and can match non-ASCII word characters under UTF-8.
+      # Characters outside this set require percent-encoding in npm releaser profile URLs.
+      CHARS_REQUIRING_ENCODING = T.let(/[^A-Za-z0-9._~-]/, Regexp)
+      private_constant :CHARS_REQUIRING_ENCODING
 
       sig { override.returns(T.nilable(String)) }
       def homepage_url
@@ -32,12 +40,26 @@ module Dependabot
         return unless npm_listing.dig("time", dependency.version)
         return if previous_releasers&.include?(npm_releaser)
 
+        # Safe: npm_releaser is non-nil after the guard clause above
+        encoded_releaser = encode_npm_releaser(T.must(npm_releaser))
         "This version was pushed to npm by " \
-          "[#{npm_releaser}](https://www.npmjs.com/~#{npm_releaser}), a new " \
+          "[#{npm_releaser}](https://www.npmjs.com/~#{encoded_releaser}), a new " \
           "releaser for #{dependency.name} since your current version."
       end
 
       private
+
+      # Encodes npm releaser names for safe inclusion in npmjs.com profile URLs.
+      # Optimization: Returns unmodified if all characters are RFC 3986 unreserved.
+      # Names with special characters (spaces, @, +, etc.) are percent-encoded.
+      sig { params(releaser: String).returns(String) }
+      def encode_npm_releaser(releaser)
+        # Early return for common case: most npm usernames contain only safe characters
+        return releaser unless releaser.match?(CHARS_REQUIRING_ENCODING)
+
+        # CGI.escape uses + for spaces; convert to %20 for proper URL encoding
+        CGI.escape(releaser).gsub("+", "%20")
+      end
 
       sig { override.returns(T.nilable(Dependabot::Source)) }
       def look_up_source
@@ -216,7 +238,13 @@ module Dependabot
             new_source&.fetch(:url)
           end
 
-        # Remove trailing slashes and escape spaces for proper URL formatting
+        # TODO: Remove URI::DEFAULT_PARSER.escape in favor of explicit space encoding (like npm_and_yarn).
+        # Currently, normalize_registry_url safely handles spaces for configured registries (new_source.nil?),
+        # but URI::DEFAULT_PARSER.escape remains here for the new_source case. This should be addressed in a
+        # separate concern when standardizing URL handling across all ecosystems.
+        # NOTE: URI::DEFAULT_PARSER.escape is deprecated and should be replaced with URI.encode_uri_component
+        # or a similar approach.
+        # URI::DEFAULT_PARSER.escape encodes many characters; then remove trailing slashes
         registry_url = URI::DEFAULT_PARSER.escape(registry_url)&.gsub(%r{/+$}, "")
 
         # NPM registries expect slashes to be escaped
@@ -236,6 +264,8 @@ module Dependabot
       sig { params(registry: T.nilable(String)).returns(T.nilable(String)) }
       def normalize_registry_url(registry)
         return nil unless registry
+
+        registry = registry.strip.gsub(/\s+/, "%20")
         return registry if registry.start_with?("http")
 
         "https://#{registry}"
