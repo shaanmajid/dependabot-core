@@ -322,8 +322,11 @@ module Dependabot
             new_source&.fetch(:url)
           end
 
-          # Remove trailing slashes from registry URL
-        registry_url = registry_url.gsub(%r{/+$}, "")
+        # Encode spaces in registry URL for proper HTTP requests
+        # (configured_registry_from_credentials already encodes spaces via normalize_registry_url)
+        registry_url = registry_url&.gsub(" ", "%20")
+        # Remove trailing slashes to avoid double slashes when appending dependency name
+        registry_url = registry_url&.gsub(%r{/+$}, "")
 
         # NPM registries expect slashes to be escaped
         escaped_dependency_name = dependency.name.gsub("/", "%2F")
