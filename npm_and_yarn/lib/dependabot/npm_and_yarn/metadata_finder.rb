@@ -114,8 +114,16 @@ module Dependabot
         # Early return for common case: most npm usernames contain only safe characters
         return releaser unless releaser.match?(CHARS_REQUIRING_ENCODING)
 
-        # URI.encode_www_form_component properly encodes for URL paths (%20 for spaces)
-        URI.encode_www_form_component(releaser)
+        # RFC 3986 percent-encoding: unreserved characters stay, rest become %XX
+        # Note: We manually encode to use %20 for spaces (not +) as required for URL paths
+        releaser.bytes.map do |byte|
+          char = byte.chr
+          if char.match?(/[A-Za-z0-9._~\-]/)
+            char
+          else
+            format("%02X", byte).prepend("%")
+          end
+        end.join
       end
 
       sig { params(version: T.nilable(String)).returns(T::Hash[String, String]) }
