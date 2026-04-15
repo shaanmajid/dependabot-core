@@ -114,8 +114,8 @@ module Dependabot
         # Early return for common case: most npm usernames contain only safe characters
         return releaser unless releaser.match?(CHARS_REQUIRING_ENCODING)
 
-        # URI.encode_uri_component properly encodes for URL paths (%20 for spaces)
-        URI.encode_uri_component(releaser)
+        # URI.encode_www_form_component properly encodes for URL paths (%20 for spaces)
+        URI.encode_www_form_component(releaser)
       end
 
       sig { params(version: T.nilable(String)).returns(T::Hash[String, String]) }
