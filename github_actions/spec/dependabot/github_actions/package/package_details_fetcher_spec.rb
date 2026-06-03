@@ -421,9 +421,15 @@ RSpec.describe Dependabot::GithubActions::Package::PackageDetailsFetcher do
     end
 
     context "when git_commit_checker.refs_for_tag_with_detail fails" do
+      let(:github_release_dates) { {} }
+
       before do
         mock_checker = instance_double(Dependabot::GitCommitChecker)
         allow(mock_checker).to receive(:allowed_version_tags).and_return([double(name: "v1.0.0")])
+        allow(mock_checker)
+          .to receive(:github_release_published_dates_for_tags)
+          .with(["v1.0.0"])
+          .and_return(github_release_dates)
         allow(mock_checker).to receive(:refs_for_tag_with_detail)
           .and_raise(StandardError, "git error")
         allow(fetcher).to receive(:git_commit_checker).and_return(mock_checker)
@@ -434,8 +440,19 @@ RSpec.describe Dependabot::GithubActions::Package::PackageDetailsFetcher do
       end
 
       it "logs the error" do
-        expect(Dependabot.logger).to receive(:error).with(/Error fetching tag and release date/)
+        allow(Dependabot.logger).to receive(:error)
+        expect(Dependabot.logger).to receive(:error).with(/Error fetching git tag release dates/)
         fetch_tag_and_release_date
+      end
+
+      context "when GitHub release metadata has a date for the tag" do
+        let(:github_release_dates) { { "v1.0.0" => "2024-04-01T12:00:00Z" } }
+
+        it "uses the GitHub release date without git tag metadata" do
+          expect(fetch_tag_and_release_date).to contain_exactly(
+            have_attributes(tag: "v1.0.0", release_date: "2024-04-01T12:00:00Z")
+          )
+        end
       end
     end
 

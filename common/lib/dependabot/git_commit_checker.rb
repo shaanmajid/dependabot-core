@@ -265,7 +265,7 @@ module Dependabot
     def github_release_published_dates_for_tags(tag_names)
       return {} if tag_names.empty?
 
-      source = github_source
+      source = github_release_source
       return {} unless source
 
       client = Dependabot::Clients::GithubWithRetries.for_source(
@@ -730,6 +730,17 @@ module Dependabot
       return unless listing_source_url
 
       source = Source.from_url(listing_source_url)
+      return unless source&.provider == "github"
+
+      source
+    end
+
+    sig { returns(T.nilable(Dependabot::Source)) }
+    def github_release_source
+      source_url = dependency_source_details&.fetch(:url, nil) || listing_source_url
+      return unless source_url
+
+      source = Source.from_url(source_url)
       return unless source&.provider == "github"
 
       source

@@ -480,6 +480,39 @@ RSpec.describe Dependabot::GithubActions::UpdateChecker do
         it { is_expected.to eq(Gem::Version.new("1.0.1")) }
       end
 
+      context "when GitHub release lookup setup fails with cooldown enabled" do
+        let(:reference) { v1_0_1_tag }
+        let(:update_cooldown) do
+          Dependabot::Package::ReleaseCooldownOptions.new(default_days: 90)
+        end
+
+        before do
+          allow(Time).to receive(:now).and_return(Time.parse("2019-08-06 18:29:44 -0400"))
+
+          allow(Dependabot::GitCommitChecker).to receive(:new).and_wrap_original do |method, **kwargs|
+            instance = method.call(**kwargs)
+
+            allow(instance).to receive_messages(
+              refs_for_tag_with_detail: [
+                Dependabot::GitTagWithDetail.new(tag: "v1.0.1", release_date: "2019-01-01T00:00:00+00:00"),
+                Dependabot::GitTagWithDetail.new(tag: "v1.1.0", release_date: "2019-01-01T00:00:00+00:00")
+              ],
+              local_tags_for_allowed_versions: [
+                { tag: "v1.0.1", version: Dependabot::GithubActions::Version.new("1.0.1") },
+                { tag: "v1.1.0", version: Dependabot::GithubActions::Version.new("1.1.0") }
+              ]
+            )
+            instance
+          end
+
+          allow(Dependabot::Clients::GithubWithRetries)
+            .to receive(:for_source)
+            .and_raise(StandardError, "client error")
+        end
+
+        it { is_expected.to eq(Gem::Version.new("1.0.1")) }
+      end
+
       context "when the higher version tag moved after an older GitHub release" do
         let(:reference) { v1_0_1_tag }
         let(:github_client) { double("github_client") }
@@ -1162,6 +1195,46 @@ RSpec.describe Dependabot::GithubActions::UpdateChecker do
             tag_name = tag.is_a?(Hash) ? tag.fetch(:tag) : tag.tag
             tag_name if tag_name.start_with?("v3")
           end
+        end
+      end
+
+      it "keeps metadata and rewritten version tag aligned to cooled-down target" do
+        expect(checker.latest_version).to eq(Dependabot::GithubActions::Version.new("2.7.0"))
+        expect(updated_requirements.first.dig(:source, :ref)).to eq("v2.7.0")
+      end
+    end
+
+    context "when GitHub release publication date cools down the latest major for a version tag reference" do
+      let(:dependency_name) { "actions/checkout" }
+      let(:upload_pack_fixture) { "checkout" }
+      let(:reference) { "v2" }
+      let(:github_client) { double("github_client") }
+      let(:update_cooldown) do
+        Dependabot::Package::ReleaseCooldownOptions.new(default_days: 7)
+      end
+
+      before do
+        allow(Time).to receive(:now).and_return(Time.parse("2022-12-01T00:00:00Z"))
+
+        allow(Dependabot::GitCommitChecker).to receive(:new).and_wrap_original do |method, **kwargs|
+          instance = method.call(**kwargs)
+
+          allow(instance).to receive(:refs_for_tag_with_detail).and_return(
+            [
+              Dependabot::GitTagWithDetail.new(tag: "v2.7.0", release_date: "2022-01-01T00:00:00+00:00")
+            ]
+          )
+          instance
+        end
+
+        allow(Dependabot::Clients::GithubWithRetries)
+          .to receive(:for_source)
+          .and_return(github_client)
+        allow(github_client).to receive(:releases).and_return([])
+        allow(github_client).to receive(:release_for_tag) do |_repo, tag_name|
+          raise Octokit::NotFound unless tag_name.start_with?("v3")
+
+          double(published_at: "2022-11-30T00:00:00+00:00")
         end
       end
 

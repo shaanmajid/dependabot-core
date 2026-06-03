@@ -133,22 +133,17 @@ module Dependabot
         def fetch_tag_and_release_date
           allowed_version_tags = git_commit_checker.allowed_version_tags
           allowed_tag_names = allowed_version_tags.map(&:name)
-          allowed_tag_names_by_lookup_name = allowed_tag_names.to_h do |tag_name|
-            [release_lookup_tag_name(tag_name), tag_name]
-          end
-
-          # Use the shared GitCommitChecker#refs_for_tag_with_detail to fetch all tags
-          # with release dates in a single clone (instead of one clone per tag)
-          all_refs_with_detail = git_commit_checker.refs_for_tag_with_detail
 
           github_release_dates = git_commit_checker.github_release_published_dates_for_tags(allowed_tag_names)
-          result = all_refs_with_detail.filter_map do |ref|
-            tag_name = allowed_tag_names_by_lookup_name[release_lookup_tag_name(ref.tag)]
-            next unless tag_name
+          git_release_dates = git_release_dates_by_lookup_name
+          result = allowed_tag_names.filter_map do |tag_name|
+            git_tag_date = git_release_dates[release_lookup_tag_name(tag_name)]
+            release_date = release_date_for_tag(tag_name, git_tag_date, github_release_dates)
+            next unless release_date
 
             Dependabot::GitTagWithDetail.new(
               tag: tag_name,
-              release_date: release_date_for_tag(tag_name, ref.release_date, github_release_dates)
+              release_date: release_date
             )
           end
 
@@ -188,6 +183,16 @@ module Dependabot
         end
 
         private
+
+        sig { returns(T::Hash[String, T.nilable(String)]) }
+        def git_release_dates_by_lookup_name
+          git_commit_checker.refs_for_tag_with_detail.to_h do |ref|
+            [release_lookup_tag_name(ref.tag), ref.release_date]
+          end
+        rescue StandardError => e
+          Dependabot.logger.error("Error fetching git tag release dates: #{e.message}")
+          {}
+        end
 
         sig do
           params(

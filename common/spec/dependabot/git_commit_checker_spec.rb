@@ -1818,6 +1818,36 @@ RSpec.describe Dependabot::GitCommitChecker do
       )
     end
 
+    context "when the metadata listing source differs from the dependency source" do
+      let(:github_client) { double("github_client") }
+      let(:release_lookup_sources) { [] }
+      let(:github_release_dates) do
+        {
+          "v1.0.0" => "2024-01-15T12:34:56Z",
+          "v2.0.0" => "2024-02-15T12:34:56Z"
+        }
+      end
+
+      before do
+        allow(checker).to receive(:listing_source_url).and_return("https://github.com/metadata/repo")
+        allow(Dependabot::Clients::GithubWithRetries).to receive(:for_source) do |source:, **_kwargs|
+          release_lookup_sources << source
+          github_client
+        end
+        allow(github_client).to receive(:release_for_tag) do |_repo, tag_name|
+          double(published_at: github_release_dates.fetch(tag_name))
+        end
+      end
+
+      it "looks up releases on the dependency source repository" do
+        expect(release_dates).to eq(
+          "v1.0.0" => "2024-01-15T12:34:56Z",
+          "v2.0.0" => "2024-02-15T12:34:56Z"
+        )
+        expect(release_lookup_sources.map(&:repo)).to eq(["gocardless/business"])
+      end
+    end
+
     context "when the requested tag name includes tags/ shorthand" do
       let(:tag_names) { ["tags/v1.0.0"] }
 
