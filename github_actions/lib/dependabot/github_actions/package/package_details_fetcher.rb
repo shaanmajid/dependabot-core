@@ -214,7 +214,7 @@ module Dependabot
 
         sig { params(tag_name: String).returns(String) }
         def release_lookup_tag_name(tag_name)
-          tag_name.delete_prefix("tags/")
+          tag_name.delete_prefix("refs/tags/").delete_prefix("tags/")
         end
 
         sig { returns(Dependabot::GitCommitChecker) }

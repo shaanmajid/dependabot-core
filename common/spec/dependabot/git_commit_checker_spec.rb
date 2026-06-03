@@ -1818,12 +1818,22 @@ RSpec.describe Dependabot::GitCommitChecker do
       )
     end
 
-    context "when the requested tag name includes refs/tags shorthand" do
+    context "when the requested tag name includes tags/ shorthand" do
       let(:tag_names) { ["tags/v1.0.0"] }
 
       it "looks up the GitHub release by unprefixed tag and maps back to the requested tag" do
         expect(release_dates).to eq(
           "tags/v1.0.0" => "2024-01-15T12:34:56Z"
+        )
+      end
+    end
+
+    context "when the requested tag name includes a refs/tags prefix" do
+      let(:tag_names) { ["refs/tags/v1.0.0"] }
+
+      it "looks up the GitHub release by unprefixed tag and maps back to the requested tag" do
+        expect(release_dates).to eq(
+          "refs/tags/v1.0.0" => "2024-01-15T12:34:56Z"
         )
       end
     end
@@ -1878,6 +1888,24 @@ RSpec.describe Dependabot::GitCommitChecker do
         expect(release_dates).to eq(
           "v1.0.0" => "2024-04-01T12:00:00Z",
           "v2.0.0" => "2024-02-15T12:34:56Z"
+        )
+      end
+    end
+
+    context "when the GitHub release client cannot be created" do
+      let(:current_time) { Time.parse("2024-04-01T12:00:00Z") }
+
+      before do
+        allow(Time).to receive(:now).and_return(current_time)
+        allow(Dependabot::Clients::GithubWithRetries)
+          .to receive(:for_source)
+          .and_raise(StandardError, "client error")
+      end
+
+      it "treats all requested tags as having an unknown recent release date" do
+        expect(release_dates).to eq(
+          "v1.0.0" => "2024-04-01T12:00:00Z",
+          "v2.0.0" => "2024-04-01T12:00:00Z"
         )
       end
     end

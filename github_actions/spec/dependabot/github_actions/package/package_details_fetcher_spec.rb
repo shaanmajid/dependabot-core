@@ -382,7 +382,7 @@ RSpec.describe Dependabot::GithubActions::Package::PackageDetailsFetcher do
       end
     end
 
-    context "when the allowed tag name includes refs/tags shorthand" do
+    context "when the allowed tag name includes tags/ shorthand" do
       before do
         allow(mock_checker).to receive(:allowed_version_tags).and_return([double(name: "tags/v2.0.0")])
         allow(mock_checker)
@@ -395,6 +395,25 @@ RSpec.describe Dependabot::GithubActions::Package::PackageDetailsFetcher do
         expect(fetch_tag_and_release_date).to contain_exactly(
           have_attributes(
             tag: "tags/v2.0.0",
+            release_date: "2024-02-15T12:34:56Z"
+          )
+        )
+      end
+    end
+
+    context "when the allowed tag name includes a refs/tags prefix" do
+      before do
+        allow(mock_checker).to receive(:allowed_version_tags).and_return([double(name: "refs/tags/v2.0.0")])
+        allow(mock_checker)
+          .to receive(:github_release_published_dates_for_tags)
+          .with(["refs/tags/v2.0.0"])
+          .and_return({ "refs/tags/v2.0.0" => "2024-02-15T12:34:56Z" })
+      end
+
+      it "returns the allowed tag name with the GitHub release publication date" do
+        expect(fetch_tag_and_release_date).to contain_exactly(
+          have_attributes(
+            tag: "refs/tags/v2.0.0",
             release_date: "2024-02-15T12:34:56Z"
           )
         )
