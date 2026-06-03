@@ -264,14 +264,13 @@ RSpec.describe Dependabot::GithubActions::Package::PackageDetailsFetcher do
         Dependabot::GitTagWithDetail.new(tag: "v3.0.0", release_date: "2024-03-01T00:00:00Z")
       ]
     end
+    let(:mock_checker) { instance_double(Dependabot::GitCommitChecker) }
 
     before do
       # Stub git_commit_checker to return mock tags with release dates
-      mock_checker = instance_double(Dependabot::GitCommitChecker)
-
-      # Also stub allowed_version_tags to include all our test tags
       allow(mock_checker).to receive_messages(
         refs_for_tag_with_detail: git_tag_with_details,
+        github_release_published_dates_for_tags: {},
         allowed_version_tags: git_tag_with_details.map { |tag|
           double(name: tag.tag)
         }
@@ -317,6 +316,91 @@ RSpec.describe Dependabot::GithubActions::Package::PackageDetailsFetcher do
       end
     end
 
+    context "when GitHub release metadata exists for a tag" do
+      before do
+        allow(mock_checker)
+          .to receive(:github_release_published_dates_for_tags)
+          .with(contain_exactly("v1.0.0", "v2.0.0", "v3.0.0"))
+          .and_return({ "v2.0.0" => "2024-02-15T12:34:56Z" })
+      end
+
+      it "uses the release published_at date when it is newer than the git tag creation date" do
+        tag_date_map = fetch_tag_and_release_date.to_h { |item| [item.tag, item.release_date] }
+
+        expect(tag_date_map["v1.0.0"]).to eq("2024-01-01T00:00:00Z")
+        expect(tag_date_map["v2.0.0"]).to eq("2024-02-15T12:34:56Z")
+        expect(tag_date_map["v3.0.0"]).to eq("2024-03-01T00:00:00Z")
+      end
+    end
+
+    context "when git tag metadata is newer than the GitHub release metadata" do
+      before do
+        allow(mock_checker)
+          .to receive(:github_release_published_dates_for_tags)
+          .with(contain_exactly("v1.0.0", "v2.0.0", "v3.0.0"))
+          .and_return({ "v2.0.0" => "2024-01-15T12:34:56Z" })
+      end
+
+      it "keeps the newer git tag creation date" do
+        tag_date_map = fetch_tag_and_release_date.to_h { |item| [item.tag, item.release_date] }
+
+        expect(tag_date_map["v2.0.0"]).to eq("2024-02-01T00:00:00Z")
+      end
+    end
+
+    context "when GitHub release metadata has no date for a tag" do
+      before do
+        allow(mock_checker)
+          .to receive(:github_release_published_dates_for_tags)
+          .and_return({})
+      end
+
+      it "falls back to git tag creation dates" do
+        tag_date_map = fetch_tag_and_release_date.to_h { |item| [item.tag, item.release_date] }
+
+        git_tag_with_details.each do |git_tag|
+          expect(tag_date_map[git_tag.tag]).to eq(git_tag.release_date)
+        end
+      end
+    end
+
+    context "when GitHub release metadata lookup fails" do
+      before do
+        allow(mock_checker)
+          .to receive(:github_release_published_dates_for_tags)
+          .and_return({ "v2.0.0" => "2024-04-01T12:00:00Z" })
+      end
+
+      it "only treats the failed tag as recent" do
+        tag_date_map = fetch_tag_and_release_date.to_h { |item| [item.tag, item.release_date] }
+
+        expect(tag_date_map).to eq(
+          "v1.0.0" => "2024-01-01T00:00:00Z",
+          "v2.0.0" => "2024-04-01T12:00:00Z",
+          "v3.0.0" => "2024-03-01T00:00:00Z"
+        )
+      end
+    end
+
+    context "when the allowed tag name includes refs/tags shorthand" do
+      before do
+        allow(mock_checker).to receive(:allowed_version_tags).and_return([double(name: "tags/v2.0.0")])
+        allow(mock_checker)
+          .to receive(:github_release_published_dates_for_tags)
+          .with(["tags/v2.0.0"])
+          .and_return({ "tags/v2.0.0" => "2024-02-15T12:34:56Z" })
+      end
+
+      it "returns the allowed tag name with the GitHub release publication date" do
+        expect(fetch_tag_and_release_date).to contain_exactly(
+          have_attributes(
+            tag: "tags/v2.0.0",
+            release_date: "2024-02-15T12:34:56Z"
+          )
+        )
+      end
+    end
+
     context "when git_commit_checker.refs_for_tag_with_detail fails" do
       before do
         mock_checker = instance_double(Dependabot::GitCommitChecker)
@@ -343,6 +427,7 @@ RSpec.describe Dependabot::GithubActions::Package::PackageDetailsFetcher do
           refs_for_tag_with_detail: [
             Dependabot::GitTagWithDetail.new(tag: "v999.0.0", release_date: "2099-01-01T00:00:00Z")
           ],
+          github_release_published_dates_for_tags: {},
           allowed_version_tags: [double(name: "v1.0.0")]
         )
         allow(fetcher).to receive(:git_commit_checker).and_return(mock_checker)

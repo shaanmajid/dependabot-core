@@ -132,14 +132,24 @@ module Dependabot
         sig { returns(T::Array[Dependabot::GitTagWithDetail]) }
         def fetch_tag_and_release_date
           allowed_version_tags = git_commit_checker.allowed_version_tags
-          allowed_tag_names = Set.new(allowed_version_tags.map(&:name))
+          allowed_tag_names = allowed_version_tags.map(&:name)
+          allowed_tag_names_by_lookup_name = allowed_tag_names.to_h do |tag_name|
+            [release_lookup_tag_name(tag_name), tag_name]
+          end
 
           # Use the shared GitCommitChecker#refs_for_tag_with_detail to fetch all tags
           # with release dates in a single clone (instead of one clone per tag)
           all_refs_with_detail = git_commit_checker.refs_for_tag_with_detail
 
-          result = all_refs_with_detail.select do |ref|
-            allowed_tag_names.include?(ref.tag)
+          github_release_dates = git_commit_checker.github_release_published_dates_for_tags(allowed_tag_names)
+          result = all_refs_with_detail.filter_map do |ref|
+            tag_name = allowed_tag_names_by_lookup_name[release_lookup_tag_name(ref.tag)]
+            next unless tag_name
+
+            Dependabot::GitTagWithDetail.new(
+              tag: tag_name,
+              release_date: release_date_for_tag(tag_name, ref.release_date, github_release_dates)
+            )
           end
 
           # Log an error if we couldn't fetch any release dates
@@ -178,6 +188,34 @@ module Dependabot
         end
 
         private
+
+        sig do
+          params(
+            tag_name: String,
+            git_tag_date: T.nilable(String),
+            github_release_dates: T::Hash[String, String]
+          ).returns(T.nilable(String))
+        end
+        def release_date_for_tag(tag_name, git_tag_date, github_release_dates)
+          github_release_date = github_release_dates[tag_name]
+          return git_tag_date unless github_release_date
+
+          most_recent_release_date(git_tag_date, github_release_date)
+        end
+
+        sig { params(git_tag_date: T.nilable(String), github_release_date: String).returns(String) }
+        def most_recent_release_date(git_tag_date, github_release_date)
+          return github_release_date unless git_tag_date
+
+          Time.parse(git_tag_date) > Time.parse(github_release_date) ? git_tag_date : github_release_date
+        rescue ArgumentError
+          github_release_date
+        end
+
+        sig { params(tag_name: String).returns(String) }
+        def release_lookup_tag_name(tag_name)
+          tag_name.delete_prefix("tags/")
+        end
 
         sig { returns(Dependabot::GitCommitChecker) }
         def git_commit_checker

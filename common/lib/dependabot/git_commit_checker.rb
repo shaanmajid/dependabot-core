@@ -3,6 +3,7 @@
 
 require "excon"
 require "sorbet-runtime"
+require "time"
 require "gitlab"
 require "dependabot/clients/github_with_retries"
 require "dependabot/clients/gitlab_with_retries"
@@ -258,6 +259,35 @@ module Dependabot
     sig { returns(T::Array[Dependabot::GitTagWithDetail]) }
     def refs_for_tag_with_detail
       local_repo_git_metadata_fetcher.refs_for_tag_with_detail
+    end
+
+    sig { params(tag_names: T::Array[String]).returns(T::Hash[String, String]) }
+    def github_release_published_dates_for_tags(tag_names)
+      return {} if tag_names.empty?
+
+      source = github_source
+      return {} unless source
+
+      client = Dependabot::Clients::GithubWithRetries.for_source(
+        source: source,
+        credentials: credentials
+      )
+
+      release_dates = T.let({}, T::Hash[String, String])
+      tag_names.each do |tag_name|
+        release = T.unsafe(client).release_for_tag(source.repo, release_lookup_tag_name(tag_name))
+        published_at = published_at_for_release(release)
+        release_dates[tag_name] = published_at || Time.now.utc.iso8601
+      rescue Octokit::NotFound
+        next
+      rescue StandardError => e
+        Dependabot.logger.debug("Error checking GitHub release publication date for #{tag_name}: #{e.message}")
+        release_dates[tag_name] = Time.now.utc.iso8601
+      end
+      release_dates
+    rescue StandardError => e
+      Dependabot.logger.debug("Error checking GitHub release publication dates: #{e.message}")
+      tag_names.to_h { |tag_name| [tag_name, Time.now.utc.iso8601] }
     end
 
     sig { params(commit_sha: T.nilable(String)).returns(T.nilable(String)) }
@@ -664,8 +694,8 @@ module Dependabot
     def github_release_prerelease?(tag_name)
       return false unless listing_source_url
 
-      source = Source.from_url(listing_source_url)
-      return false unless source&.provider == "github"
+      source = github_source
+      return false unless source
 
       release = github_releases.find { |r| r.tag_name == tag_name }
       return false unless release
@@ -680,13 +710,11 @@ module Dependabot
     def github_releases
       @github_releases ||= T.let(
         begin
-          return [] unless listing_source_url
-
-          source = Source.from_url(listing_source_url)
-          return [] unless source&.provider == "github"
+          source = github_source
+          return [] unless source
 
           client = Dependabot::Clients::GithubWithRetries.for_source(
-            source: T.must(source),
+            source: source,
             credentials: credentials
           )
           client.releases(T.must(source).repo, per_page: 100)
@@ -695,6 +723,31 @@ module Dependabot
         end,
         T.nilable(T::Array[T.untyped])
       )
+    end
+
+    sig { returns(T.nilable(Dependabot::Source)) }
+    def github_source
+      return unless listing_source_url
+
+      source = Source.from_url(listing_source_url)
+      return unless source&.provider == "github"
+
+      source
+    end
+
+    sig { params(tag_name: String).returns(String) }
+    def release_lookup_tag_name(tag_name)
+      tag_name.delete_prefix("tags/")
+    end
+
+    sig { params(release: T.untyped).returns(T.nilable(String)) }
+    def published_at_for_release(release)
+      published_at = T.unsafe(release).published_at
+      return unless published_at
+
+      Time.parse(published_at.to_s).utc.iso8601
+    rescue ArgumentError
+      nil
     end
 
     sig { params(tag: Dependabot::GitRef).returns(Gem::Version) }

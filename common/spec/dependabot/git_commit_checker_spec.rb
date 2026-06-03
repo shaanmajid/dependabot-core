@@ -1772,6 +1772,117 @@ RSpec.describe Dependabot::GitCommitChecker do
     end
   end
 
+  describe "#github_release_published_dates_for_tags" do
+    subject(:release_dates) { checker.github_release_published_dates_for_tags(tag_names) }
+
+    let(:tag_names) { ["v1.0.0", "v2.0.0"] }
+    let(:source) do
+      {
+        type: "git",
+        url: "https://github.com/gocardless/business",
+        branch: "master",
+        ref: "master"
+      }
+    end
+
+    before do
+      stub_request(:get, "https://api.github.com/repos/gocardless/business/releases/tags/v1.0.0")
+        .with(headers: { "Authorization" => "token token" })
+        .to_return(
+          status: 200,
+          body: {
+            tag_name: "v1.0.0",
+            published_at: "2024-01-15T12:34:56Z",
+            draft: false
+          }.to_json,
+          headers: { "Content-Type" => "application/json" }
+        )
+
+      stub_request(:get, "https://api.github.com/repos/gocardless/business/releases/tags/v2.0.0")
+        .with(headers: { "Authorization" => "token token" })
+        .to_return(
+          status: 200,
+          body: {
+            tag_name: "v2.0.0",
+            published_at: "2024-02-15T12:34:56Z",
+            draft: false
+          }.to_json,
+          headers: { "Content-Type" => "application/json" }
+        )
+    end
+
+    it "returns published release dates for the requested tags" do
+      expect(release_dates).to eq(
+        "v1.0.0" => "2024-01-15T12:34:56Z",
+        "v2.0.0" => "2024-02-15T12:34:56Z"
+      )
+    end
+
+    context "when the requested tag name includes refs/tags shorthand" do
+      let(:tag_names) { ["tags/v1.0.0"] }
+
+      it "looks up the GitHub release by unprefixed tag and maps back to the requested tag" do
+        expect(release_dates).to eq(
+          "tags/v1.0.0" => "2024-01-15T12:34:56Z"
+        )
+      end
+    end
+
+    context "when the tag list is empty" do
+      let(:tag_names) { [] }
+
+      it { is_expected.to eq({}) }
+    end
+
+    context "when dependency is not from GitHub" do
+      let(:source) do
+        {
+          type: "git",
+          url: "https://gitlab.com/some/repo",
+          branch: "master",
+          ref: "master"
+        }
+      end
+
+      before do
+        allow(checker).to receive(:listing_source_url).and_return("https://gitlab.com/some/repo")
+      end
+
+      it { is_expected.to eq({}) }
+    end
+
+    context "when a tag has no GitHub release" do
+      let(:tag_names) { ["v1.0.0"] }
+
+      before do
+        stub_request(:get, "https://api.github.com/repos/gocardless/business/releases/tags/v1.0.0")
+          .with(headers: { "Authorization" => "token token" })
+          .to_return(status: 404, body: "Not Found")
+      end
+
+      it { is_expected.to eq({}) }
+    end
+
+    context "when a GitHub release lookup fails" do
+      let(:current_time) { Time.parse("2024-04-01T12:00:00Z") }
+
+      before do
+        allow(Time).to receive(:now).and_return(current_time)
+
+        stub_request(:get, "https://api.github.com/repos/gocardless/business/releases/tags/v1.0.0")
+          .with(headers: { "Authorization" => "token token" })
+          .to_return(status: 403, body: "Forbidden")
+      end
+
+      it "treats only that tag as having an unknown recent release date" do
+        expect(release_dates).to eq(
+          "v1.0.0" => "2024-04-01T12:00:00Z",
+          "v2.0.0" => "2024-02-15T12:34:56Z"
+        )
+      end
+    end
+  end
+
   describe "#tag_is_prerelease?" do
     subject { checker.send(:tag_is_prerelease?, tag) }
 
