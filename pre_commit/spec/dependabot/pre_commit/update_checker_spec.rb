@@ -194,6 +194,9 @@ RSpec.describe Dependabot::PreCommit::UpdateChecker do
         allow(Dependabot::SharedHelpers).to receive(:run_shell_command)
           .with(/git clone --bare/, any_args).and_return("")
         allow(Dependabot::SharedHelpers).to receive(:run_shell_command)
+          .with(/git for-each-ref/, hash_including(fingerprint: anything))
+          .and_return("")
+        allow(Dependabot::SharedHelpers).to receive(:run_shell_command)
           .with(/git show --no-patch/, hash_including(fingerprint: anything))
           .and_return(recent_date)
       end
@@ -239,6 +242,55 @@ RSpec.describe Dependabot::PreCommit::UpdateChecker do
   describe "#updated_requirements" do
     subject(:updated_requirements) { checker.updated_requirements }
 
+    let(:recent_date) { Time.now.utc }
+    let(:old_date) { Time.now.utc - (30 * 24 * 60 * 60) }
+
+    def stub_cooldown_candidate_checks(candidates:, git_dates:)
+      stub_cooldown_candidates(candidates)
+      stub_cooldown_git_dates(git_dates)
+    end
+
+    def stub_cooldown_candidates(candidates)
+      allow_any_instance_of(Dependabot::GitCommitChecker) # rubocop:disable RSpec/AnyInstance
+        .to receive(:local_tags_for_allowed_versions_matching_existing_precision)
+        .and_return(candidates)
+      allow_any_instance_of(Dependabot::GitCommitChecker) # rubocop:disable RSpec/AnyInstance
+        .to receive(:dependency_source_details)
+        .and_return({ type: "git", url: "https://github.com/pre-commit/pre-commit-hooks",
+                      ref: "v4.4.0", branch: nil })
+    end
+
+    def stub_cooldown_git_dates(git_dates)
+      allow(Dependabot::SharedHelpers).to receive(:in_a_temporary_directory).and_yield("/tmp/fake")
+      allow(Dir).to receive(:chdir).and_yield
+      allow(Dependabot::SharedHelpers).to receive(:run_shell_command)
+        .with(/git clone --bare/, any_args).and_return("")
+      allow(Dependabot::SharedHelpers).to receive(:run_shell_command)
+        .with(/git for-each-ref/, hash_including(fingerprint: anything)) do |command, **_kwargs|
+          git_dates.fetch(command.split.last.delete_prefix("refs/tags/"), "")
+        end
+      allow(Dependabot::SharedHelpers).to receive(:run_shell_command)
+        .with(/git show --no-patch/, hash_including(fingerprint: anything)) do |command, **_kwargs|
+          git_dates.fetch(command.split.last)
+        end
+    end
+
+    def stub_github_release_lookup(releases_by_tag)
+      github_client = fake_github_client
+      allow(Dependabot::Clients::GithubWithRetries)
+        .to receive(:for_source)
+        .and_return(github_client)
+      allow(github_client).to receive(:releases).and_return([])
+      allow(github_client).to receive(:release_for_tag) do |_repo, tag|
+        release = releases_by_tag.fetch(tag) { raise Octokit::NotFound }
+        Struct.new(:published_at).new(release)
+      end
+    end
+
+    def fake_github_client
+      Dependabot::Clients::GithubWithRetries.new
+    end
+
     it "returns updated requirements" do
       expect(updated_requirements).to be_an(Array)
     end
@@ -248,6 +300,41 @@ RSpec.describe Dependabot::PreCommit::UpdateChecker do
 
       it "updates the ref in the source" do
         expect(updated_requirements.first[:source][:ref]).not_to eq(reference)
+      end
+
+      context "with cooldown configured" do
+        let(:update_cooldown) do
+          Dependabot::Package::ReleaseCooldownOptions.new(
+            default_days: 7
+          )
+        end
+
+        it "uses the tag selected by cooldown filtering" do
+          latest_tag = {
+            tag: "v6.0.0",
+            version: Dependabot::PreCommit::Version.new("6.0.0"),
+            commit_sha: "latest_sha"
+          }
+          older_tag = {
+            tag: "v5.0.0",
+            version: Dependabot::PreCommit::Version.new("5.0.0"),
+            commit_sha: "older_sha"
+          }
+
+          stub_cooldown_candidate_checks(
+            candidates: [latest_tag, older_tag],
+            git_dates: {
+              "latest_sha" => old_date.strftime("%Y-%m-%d %H:%M:%S %z"),
+              "older_sha" => old_date.strftime("%Y-%m-%d %H:%M:%S %z")
+            }
+          )
+          stub_github_release_lookup(
+            "v6.0.0" => recent_date.iso8601,
+            "v5.0.0" => old_date.iso8601
+          )
+
+          expect(updated_requirements.first[:source][:ref]).to eq("v5.0.0")
+        end
       end
     end
 
