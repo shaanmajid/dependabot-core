@@ -1903,41 +1903,50 @@ RSpec.describe Dependabot::GitCommitChecker do
       it { is_expected.to eq({}) }
     end
 
-    context "when a GitHub release lookup fails" do
-      let(:current_time) { Time.parse("2024-04-01T12:00:00Z") }
+    context "when a GitHub release has no parseable published_at date" do
+      let(:tag_names) { ["v1.0.0"] }
 
       before do
-        allow(Time).to receive(:now).and_return(current_time)
+        stub_request(:get, "https://api.github.com/repos/gocardless/business/releases/tags/v1.0.0")
+          .with(headers: { "Authorization" => "token token" })
+          .to_return(
+            status: 200,
+            body: {
+              tag_name: "v1.0.0",
+              published_at: "not-a-date",
+              draft: false
+            }.to_json,
+            headers: { "Content-Type" => "application/json" }
+          )
+      end
 
+      it "omits the tag's GitHub release date" do
+        expect(release_dates).to eq({})
+      end
+    end
+
+    context "when a GitHub release lookup fails" do
+      before do
         stub_request(:get, "https://api.github.com/repos/gocardless/business/releases/tags/v1.0.0")
           .with(headers: { "Authorization" => "token token" })
           .to_return(status: 403, body: "Forbidden")
       end
 
-      it "treats only that tag as having an unknown recent release date" do
+      it "omits the failed tag's GitHub release date" do
         expect(release_dates).to eq(
-          "v1.0.0" => "2024-04-01T12:00:00Z",
           "v2.0.0" => "2024-02-15T12:34:56Z"
         )
       end
     end
 
     context "when the GitHub release client cannot be created" do
-      let(:current_time) { Time.parse("2024-04-01T12:00:00Z") }
-
       before do
-        allow(Time).to receive(:now).and_return(current_time)
         allow(Dependabot::Clients::GithubWithRetries)
           .to receive(:for_source)
           .and_raise(StandardError, "client error")
       end
 
-      it "treats all requested tags as having an unknown recent release date" do
-        expect(release_dates).to eq(
-          "v1.0.0" => "2024-04-01T12:00:00Z",
-          "v2.0.0" => "2024-04-01T12:00:00Z"
-        )
-      end
+      it { is_expected.to eq({}) }
     end
   end
 

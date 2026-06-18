@@ -364,14 +364,14 @@ RSpec.describe Dependabot::GithubActions::Package::PackageDetailsFetcher do
       end
     end
 
-    context "when GitHub release metadata lookup fails" do
+    context "when GitHub release metadata exists for only one tag" do
       before do
         allow(mock_checker)
           .to receive(:github_release_published_dates_for_tags)
           .and_return({ "v2.0.0" => "2024-04-01T12:00:00Z" })
       end
 
-      it "only treats the failed tag as recent" do
+      it "uses GitHub release metadata only for the matching tag" do
         tag_date_map = fetch_tag_and_release_date.to_h { |item| [item.tag, item.release_date] }
 
         expect(tag_date_map).to eq(

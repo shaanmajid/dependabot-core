@@ -510,7 +510,9 @@ RSpec.describe Dependabot::GithubActions::UpdateChecker do
             .and_raise(StandardError, "client error")
         end
 
-        it { is_expected.to eq(Gem::Version.new("1.0.1")) }
+        it "falls back to git tag dates for cooldown checks" do
+          expect(checker.latest_version).to eq(Gem::Version.new("1.1.0"))
+        end
       end
 
       context "when the higher version tag moved after an older GitHub release" do

@@ -277,17 +277,17 @@ module Dependabot
       tag_names.each do |tag_name|
         release = T.unsafe(client).release_for_tag(source.repo, release_lookup_tag_name(tag_name))
         published_at = published_at_for_release(release)
-        release_dates[tag_name] = published_at || Time.now.utc.iso8601
+        release_dates[tag_name] = published_at if published_at
       rescue Octokit::NotFound
         next
       rescue StandardError => e
         Dependabot.logger.debug("Error checking GitHub release publication date for #{tag_name}: #{e.message}")
-        release_dates[tag_name] = Time.now.utc.iso8601
+        next
       end
       release_dates
     rescue StandardError => e
       Dependabot.logger.debug("Error checking GitHub release publication dates: #{e.message}")
-      tag_names.to_h { |tag_name| [tag_name, Time.now.utc.iso8601] }
+      {}
     end
 
     sig { params(commit_sha: T.nilable(String)).returns(T.nilable(String)) }
@@ -717,7 +717,7 @@ module Dependabot
             source: source,
             credentials: credentials
           )
-          client.releases(T.must(source).repo, per_page: 100)
+          client.releases(source.repo, per_page: 100)
         rescue Octokit::Error
           []
         end,
